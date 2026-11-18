@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "akeyless-cloudrun-rta"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Akeyless Agentic Runtime Authority (RTA/ARA) for Google Cloud Run — secretless DB and cloud actions"
 readme = "README.md"
 license = "Apache-2.0"
@@ -48,6 +48,9 @@ akeyless-cloudrun-rta-mcp = "akeyless_cloudrun_rta.tools.mcp:run_mcp_server"
 [project.urls]
 Homepage = "https://github.com/akeyless-community/cloud-run-akeyless-rta"
 Repository = "https://github.com/akeyless-community/cloud-run-akeyless-rta"
+
+[tool.hatch.version]
+path = "src/akeyless_cloudrun_rta/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/akeyless_cloudrun_rta"]

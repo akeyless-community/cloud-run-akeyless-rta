@@ -1,0 +1,74 @@
+name: Publish
+
+# Push a tag vX.Y.Z (scripts/release.sh does this) to test, build, publish to
+# PyPI and create the GitHub Release. The workflow file name and the `pypi`
+# environment must match the trusted publisher registered on PyPI.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Tag must be on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "Tag $GITHUB_REF_NAME is not on main"; exit 1; }
+
+      - name: Tag must match package version
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/akeyless_cloudrun_rta/__init__.py)
+          if [ "v${version}" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match __version__ ${version}"
+            exit 1
+          fi
+
+      - run: pip install -e ".[dev,mcp]" build
+      - run: pytest
+      - run: python -m build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

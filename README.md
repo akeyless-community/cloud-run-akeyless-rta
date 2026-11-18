@@ -66,6 +66,8 @@ pip install -e '.[dev,mcp]'
 pytest
 ```
 
+Releases are automated from tags; see [docs/RELEASING.md](docs/RELEASING.md).
+
 ## License
 
 Apache-2.0
