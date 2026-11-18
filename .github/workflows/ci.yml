@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - run: pip install -e ".[dev,mcp]"
+      - run: pytest
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t akeyless-cloudrun-rta:ci .
+      - name: Container runs as non-root
+        run: test "$(docker run --rm --entrypoint id akeyless-cloudrun-rta:ci -u)" != "0"
+
+  ci-success:
+    name: ci-success
+    runs-on: ubuntu-latest
+    needs: [test, image]
+    if: always()
+    steps:
+      - name: Require all jobs to pass
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ] || [ "${{ needs.image.result }}" != "success" ]; then
+            echo "One or more jobs failed"
+            exit 1
+          fi
+          echo "All jobs passed"

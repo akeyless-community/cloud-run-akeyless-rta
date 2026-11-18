@@ -1,0 +1,208 @@
+"""Akeyless RTA/ARA client for agents on Google Cloud Run."""
+
+from __future__ import annotations
+
+import time
+from typing import Any, Callable
+
+import akeyless
+
+from akeyless_cloudrun_rta.ara import (
+    ARA_LIST_ITEM_TYPES,
+    AraSecretSummary,
+    map_ara_secrets,
+)
+from akeyless_cloudrun_rta.auth import (
+    AuthSession,
+    authenticate,
+    build_gateway_auth_header,
+    create_v2_api,
+)
+from akeyless_cloudrun_rta.config import AkeylessRtaConfig, config_from_env, validate_config
+from akeyless_cloudrun_rta.http_ara import (
+    ListSubToolsResult,
+    TargetQueryResult,
+    post_list_sub_tools,
+    post_target_query,
+)
+
+HttpOpener = Callable[..., Any]
+
+
+class AkeylessRtaClient:
+    """Secretless ARA client: list eligible secrets and run query/execute via Gateway."""
+
+    def __init__(
+        self,
+        *,
+        _http_opener: HttpOpener | None = None,
+        _api: akeyless.V2Api | None = None,
+        **config_overrides: Any,
+    ) -> None:
+        self._config = config_from_env(**config_overrides)
+        validate_config(self._config)
+        self._api = _api or create_v2_api(self._config.gateway_url, self._config.ca_bundle)
+        self._session: AuthSession | None = None
+        self._http_opener = _http_opener
+
+    @classmethod
+    def from_env(cls, **overrides: Any) -> AkeylessRtaClient:
+        return cls(**overrides)
+
+    @property
+    def config(self) -> AkeylessRtaConfig:
+        return self._config
+
+    def _get_session(self) -> AuthSession:
+        now = time.monotonic()
+        if self._session and now < self._session.expires_at:
+            return self._session
+        self._session = authenticate(self._api, self._config)
+        return self._session
+
+    def _get_token(self) -> str:
+        return self._get_session().token
+
+    def _gateway_auth_header(self) -> dict[str, str]:
+        return build_gateway_auth_header(self._get_session())
+
+    def list_secrets(self, path: str | None = None) -> list[AraSecretSummary]:
+        """List ARA-enabled secrets (metadata only — never values)."""
+        token = self._get_token()
+        kwargs: dict[str, Any] = {
+            "token": token,
+            "filter": "",
+            "type": list(ARA_LIST_ITEM_TYPES),
+            "ara_only": True,
+            "advanced_filter": "",
+        }
+        trimmed = (path or "").strip()
+        if trimmed:
+            kwargs["path"] = trimmed
+
+        result = self._api.list_items(akeyless.ListItems(**kwargs))
+        items = getattr(result, "items", None) or []
+        return map_ara_secrets(list(items))
+
+    def _resolve_secret_name(self, secret_name: str | None) -> str:
+        name = (secret_name or self._config.default_secret_name or "").strip()
+        if not name:
+            raise ValueError(
+                "secret_name is required (or configure AKEYLESS_DEFAULT_SECRET_NAME)"
+            )
+        return name
+
+    def query_db(
+        self,
+        payload: str,
+        *,
+        secret_name: str | None = None,
+        agent_id: str | None = None,
+        original_user: str | None = None,
+        original_prompt: str | None = None,
+        auth_code: str | None = None,
+        state: str | None = None,
+    ) -> TargetQueryResult:
+        """Run a database query via Gateway ARA (credentials never returned)."""
+        resolved = self._resolve_secret_name(secret_name)
+        return self._execute_target_query(
+            secret_name=resolved,
+            payload=payload,
+            agent_id=agent_id,
+            original_user=original_user,
+            original_prompt=original_prompt,
+            auth_code=auth_code,
+            state=state,
+        )
+
+    def service_execute(
+        self,
+        payload: str,
+        *,
+        secret_name: str | None = None,
+        agent_id: str | None = None,
+        original_user: str | None = None,
+        original_prompt: str | None = None,
+        auth_code: str | None = None,
+        state: str | None = None,
+    ) -> TargetQueryResult:
+        """Run a cloud/K8s/GitHub/custom-MCP action, or a remote command on an SSH/Windows/LDAP host, via Gateway ARA.
+
+        For a remote item the payload is a plain command line, or a sub-tool call such as
+        ``{"tool":"run","arguments":{"command":"uptime","host":"web1","cwd":"/"}}``.
+        """
+        resolved = self._resolve_secret_name(secret_name)
+        return self._execute_target_query(
+            secret_name=resolved,
+            payload=payload,
+            agent_id=agent_id,
+            original_user=original_user,
+            original_prompt=original_prompt,
+            auth_code=auth_code,
+            state=state,
+        )
+
+    def _execute_target_query(
+        self,
+        *,
+        secret_name: str,
+        payload: str,
+        agent_id: str | None,
+        original_user: str | None,
+        original_prompt: str | None,
+        auth_code: str | None,
+        state: str | None,
+    ) -> TargetQueryResult:
+        body: dict[str, Any] = {
+            "secret_name": secret_name,
+            "payload": payload,
+            "agent_id": agent_id or self._config.agent_id,
+            "mcp_id": self._config.mcp_id,
+        }
+        if auth_code:
+            body["auth_code"] = auth_code
+        if state:
+            body["state"] = state
+        if original_user:
+            body["original_user"] = original_user
+        if original_prompt:
+            body["original_prompt"] = original_prompt
+
+        return post_target_query(
+            self._config.ara_gateway_url,
+            self._gateway_auth_header(),
+            body,
+            opener=self._http_opener,
+            ca_bundle=self._config.ca_bundle,
+        )
+
+    def list_sub_tools(
+        self,
+        *,
+        secret_name: str | None = None,
+        agent_id: str | None = None,
+    ) -> ListSubToolsResult:
+        """Discover sub-tools for a service secret or remote item (optional before service_execute)."""
+        resolved = self._resolve_secret_name(secret_name)
+        body = {
+            "secret_name": resolved,
+            "agent_id": agent_id or self._config.agent_id,
+            "mcp_id": self._config.mcp_id,
+        }
+        return post_list_sub_tools(
+            self._config.ara_gateway_url,
+            self._gateway_auth_header(),
+            body,
+            opener=self._http_opener,
+            ca_bundle=self._config.ca_bundle,
+        )
+
+
+_default_client: AkeylessRtaClient | None = None
+
+
+def get_default_client(**overrides: Any) -> AkeylessRtaClient:
+    global _default_client
+    if overrides or _default_client is None:
+        _default_client = AkeylessRtaClient(**overrides)
+    return _default_client
