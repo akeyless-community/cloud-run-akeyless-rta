@@ -2,9 +2,12 @@
 
 Run it on Cloud Run with a service account bound to the Akeyless GCP auth
 method. The agent gets query results only; credentials stay in the Gateway.
+Set GEMINI_MODEL to a Gemini model enabled in your project (default: gemini-4-neon).
 """
 
 from __future__ import annotations
+
+import os
 
 from google.adk.agents import Agent
 
@@ -45,7 +48,7 @@ def list_sub_tools(secret_name: str) -> str:
 
 root_agent = Agent(
     name="akeyless_rta_embedded",
-    model="gemini-2.5-flash",
+    model=os.environ.get("GEMINI_MODEL", "gemini-4-neon"),
     instruction=(
         "You run database queries and cloud actions through Akeyless Runtime Authority. "
         "Call list_secrets first to pick a secret. Use query_db for database secrets and "
