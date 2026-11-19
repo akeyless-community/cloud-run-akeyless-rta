@@ -54,6 +54,9 @@ root_agent = Agent(
             connection_params=StreamableHTTPConnectionParams(
                 url=f"{SERVICE_URL}/mcp",
                 headers=_invoker_headers(),
+                # Gateway calls can take up to 270 s; ADK's default timeout is 5 s.
+                timeout=300,
+                sse_read_timeout=300,
             ),
         )
     ],

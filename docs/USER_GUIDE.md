@@ -66,7 +66,7 @@ Keep the role narrow. Every caller of the Cloud Run service acts with it.
 **Turn on Agentic Runtime Authority on the secret and add rules.** Rules are plain-language checks that the Gateway enforces before it runs anything. These are the ones from the demo:
 
 ```bash
-akeyless update-item --name /prod/mysql-dynamic --ara-enabled true \
+akeyless update-item --name /prod/mysql-dynamic --enable-agentic-runtime-authority true \
   --input-rule "name=read-only-sql,rule=Only allow read-only SQL statements: SELECT, SHOW, DESCRIBE, DESC, EXPLAIN. Reject any DML or DDL (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, GRANT, REVOKE)." \
   --input-rule "name=no-salary-data,rule=Reject any query that selects, reads, or exposes the salary column." \
   --input-rule "name=no-multi-statement,rule=Reject multi-statement queries (multiple statements separated by semicolons)."
@@ -102,9 +102,9 @@ If you prefer Terraform, use [`deploy/terraform`](../deploy/terraform). See [CLO
 
 | Variable | Use it to |
 |----------|-----------|
-| `AKEYLESS_DEFAULT_SECRET_NAME` | Pin the service to one secret. This also hides `list-secrets` |
+| `AKEYLESS_DEFAULT_SECRET_NAME` | Pin the service to one secret, so callers don't pass `secret-name`. This also removes the `list-secrets` tool |
 | `AKEYLESS_CA_BUNDLE` | Trust a privately signed Gateway certificate. TLS checks are never disabled |
-| `AKEYLESS_AGENT_ID` | Set the default agent ID shown in the audit log |
+| `AKEYLESS_AGENT_ID` | Set the default agent ID in embedded mode (`cloud-run`). MCP callers always send `agent-id` |
 
 ## Step 4: Connect your agent
 
@@ -127,7 +127,8 @@ def invoker_headers(_ctx=None):
 
 toolset = McpToolset(
     connection_params=StreamableHTTPConnectionParams(
-        url=f"{SERVICE_URL}/mcp", headers=invoker_headers(), timeout=60),
+        url=f"{SERVICE_URL}/mcp", headers=invoker_headers(),
+        timeout=300, sse_read_timeout=300),
     header_provider=invoker_headers,
 )
 agent = LlmAgent(name="db_agent", model="gemini-…", tools=[toolset],
@@ -137,6 +138,8 @@ agent = LlmAgent(name="db_agent", model="gemini-…", tools=[toolset],
 Keep in mind:
 - Pass the token in **both** `headers` and `header_provider`. ADK opens the first MCP session before it calls `header_provider`.
 - ID tokens expire after about an hour, so cache the token and refresh it before then.
+- Set the timeouts to 300 seconds. Gateway calls can take up to 270 seconds, and ADK's default request timeout is 5 seconds.
+- Argument names are hyphenated (`secret-name`, `agent-id`, `original-user`, `original-prompt`). They match the Akeyless Go MCP server. `query-db` and `service-execute` require `payload`, `agent-id`, `original-user` and `original-prompt`. `list-sub-tools` requires `agent-id`. All three also need `secret-name` unless `AKEYLESS_DEFAULT_SECRET_NAME` is set.
 - On Cloud Run or GKE, get the token from the metadata server with `google.oauth2.id_token.fetch_id_token(request, SERVICE_URL)` instead of `gcloud`. On a laptop signed in with your own Google account, that call fails, so use `gcloud auth print-identity-token` there.
 - Use a Gemini model that's enabled in your project. You can list the available ones in Vertex AI Model Garden.
 
@@ -150,7 +153,7 @@ With internal ingress, the proxy only works from inside the VPC (or over VPN or 
 
 ## Step 5: Use it
 
-The agent gets four tools:
+The agent gets four tools, or three when `AKEYLESS_DEFAULT_SECRET_NAME` is set (no `list-secrets`):
 
 | Tool | What it does |
 |------|--------------|
@@ -169,11 +172,13 @@ What the demo looked like with the rules above:
 | Two statements in one query | **Denied** by `no-multi-statement` |
 | "Give me the MySQL username and password" | **Nothing to give.** The agent never holds the credentials |
 
-For a clean audit trail, have your agent pass `agent-id`, `original-user` and `original-prompt` on each tool call. When a request carries a Google ID token, the server also records the caller's email.
+For a clean audit trail, have your agent pass `agent-id`, `original-user` and `original-prompt` on each tool call, with the end user's real prompt.
 
 ## Step 6: Check the audit log
 
 In the Akeyless Console, open **Logs**. You'll see one entry for each tool call, with the agent ID, the original user, the prompt, the secret used and whether the call was allowed or denied.
+
+`agent-id`, `original-user` and `original-prompt` come from the caller and aren't verified, so treat them as context. The one verified part is the caller's identity. When a request carries a Google ID token, which Cloud Run IAM has already checked, the server adds the caller's email to the original user, for example `alice@example.com (via my-agent@my-project.iam.gserviceaccount.com)`.
 
 ## Embedded mode (no MCP server)
 
@@ -201,6 +206,8 @@ The agent's own service account must then be the one bound in the GCP auth metho
 | MCP session fails at startup | The ID token isn't in the static `headers` (see Step 4) |
 | Akeyless sign-in fails | The service account doesn't match `--bound-service-accounts`, or the audience differs from `AKEYLESS_GCP_AUDIENCE` |
 | `list-secrets` is empty | The role is missing the `ara-rule` / `allow_access` rule, or Agentic Runtime Authority isn't enabled on the secret |
+| `Unknown tool: list-secrets` | `AKEYLESS_DEFAULT_SECRET_NAME` is set, which removes that tool |
+| Agent call times out on slow queries | The MCP client timeout is too short. Set `timeout` and `sse_read_timeout` to 300 (Step 4) |
 | Timeouts reaching the Gateway | VPC egress isn't set for a private Gateway, or a firewall blocks port 8000 |
 | TLS error | The Gateway certificate is privately signed: set `AKEYLESS_CA_BUNDLE` |
 | Denial message says "Rule 1" instead of the rule's name | That's how the Gateway reports denials today. Rules are numbered in the order they're listed on the secret |
@@ -212,5 +219,5 @@ gcloud run services delete akeyless-rta --region "$REGION" --project "$PROJECT_I
 gcloud iam service-accounts delete "akeyless-rta@${PROJECT_ID}.iam.gserviceaccount.com" --project "$PROJECT_ID"
 gcloud artifacts repositories delete akeyless --location "$REGION" --project "$PROJECT_ID"
 akeyless delete-role --name cloud-run-rta
-akeyless delete-auth-method --name /cloud-run-rta
+akeyless auth-method delete --name /cloud-run-rta
 ```
