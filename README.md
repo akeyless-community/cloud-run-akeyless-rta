@@ -15,6 +15,8 @@ Two ways to use it:
 
 ## Quick start
 
+New to this? The [user guide](docs/USER_GUIDE.md) walks through setup, deploy, connecting an agent and the audit log end to end.
+
 1. Set up the Gateway, auth method and role: [docs/AKEYLESS_SETUP.md](docs/AKEYLESS_SETUP.md)
 2. Deploy: [docs/CLOUD_RUN_DEPLOY.md](docs/CLOUD_RUN_DEPLOY.md)
 
