@@ -28,11 +28,14 @@ resource "google_cloud_run_v2_service" "rta" {
     service_account = google_service_account.rta.email
     timeout         = "300s"
 
-    vpc_access {
-      egress = "PRIVATE_RANGES_ONLY"
-      network_interfaces {
-        network    = var.network
-        subnetwork = var.subnet
+    dynamic "vpc_access" {
+      for_each = var.network == "" ? [] : [1]
+      content {
+        egress = "PRIVATE_RANGES_ONLY"
+        network_interfaces {
+          network    = var.network
+          subnetwork = var.subnet
+        }
       }
     }
 

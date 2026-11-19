@@ -29,7 +29,7 @@ The script creates the service account and Artifact Registry repo if missing, bu
 | `--service-account` | Identity bound in the Akeyless GCP auth method |
 | `--no-allow-unauthenticated` | Only IAM-authorized callers can reach the tools |
 | `--ingress internal` | Default; set `INGRESS=all` only if callers are outside the VPC |
-| `--network/--subnet --vpc-egress private-ranges-only` | Reach the private Gateway; other traffic goes out normally |
+| `--network/--subnet --vpc-egress private-ranges-only` | Reach a private Gateway; other traffic goes out normally. Leave `NETWORK` and `SUBNET` unset when the Gateway has a public address (for example a Gateway in another cloud). |
 | `--timeout 300` | Longer than the 270 s RTA request timeout |
 
 It then grants `roles/run.invoker` to each member in `INVOKER_MEMBERS`.
