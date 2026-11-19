@@ -13,12 +13,19 @@ variable "image" {
 
 variable "network" {
   type        = string
-  description = "VPC network that can reach the Akeyless Gateway."
+  default     = ""
+  description = "VPC network that can reach a private Gateway. Leave empty for a Gateway with a public address."
 }
 
 variable "subnet" {
   type        = string
-  description = "Subnet used for Direct VPC egress."
+  default     = ""
+  description = "Subnet used for Direct VPC egress. Required when network is set."
+
+  validation {
+    condition     = (var.network == "") == (var.subnet == "")
+    error_message = "Set both network and subnet, or neither."
+  }
 }
 
 variable "akeyless_gateway_url" {
